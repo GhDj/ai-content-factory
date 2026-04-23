@@ -1,0 +1,14 @@
+node_modules/
+dist/
+public/
+.env
+.DS_Store
+output/
+assets/sessions/
+assets/youtube-token.json
+assets/tiktok-token.json
+*.mp3
+*.m4a
+*.mp4
+*.png
+*.db

@@ -1,0 +1,53 @@
+{
+  "name": "ai-content-factory",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "pipeline": "tsx src/index.ts pipeline",
+    "research": "tsx src/index.ts research",
+    "scripts": "tsx src/index.ts scripts",
+    "voice": "tsx src/index.ts voice",
+    "video": "tsx src/index.ts video",
+    "publish": "tsx src/index.ts publish",
+    "auto-publish": "tsx src/index.ts auto-publish",
+    "auth:youtube": "tsx src/index.ts auth:youtube",
+    "auth:tiktok": "tsx src/index.ts auth:tiktok",
+    "queue": "tsx src/index.ts queue",
+    "backgrounds": "tsx src/scripts/generate-backgrounds.ts",
+    "scheduler": "tsx cron/scheduler.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@remotion/bundler": "^4.0.448",
+    "@remotion/cli": "^4.0.448",
+    "@remotion/renderer": "^4.0.448",
+    "axios": "^1.15.0",
+    "better-sqlite3": "^12.9.0",
+    "cheerio": "^1.2.0",
+    "dotenv": "^17.4.2",
+    "fs-extra": "^11.3.4",
+    "googleapis": "^171.4.0",
+    "groq-sdk": "^1.1.2",
+    "node-cron": "^4.2.1",
+    "playwright": "^1.59.1",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "remotion": "^4.0.448",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^25.6.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3"
+  }
+}
