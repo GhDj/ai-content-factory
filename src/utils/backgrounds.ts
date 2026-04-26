@@ -13,7 +13,25 @@ const QUERIES = [
   'dark forest fog mystery',
   'black particles dark background',
   'dark ocean waves night',
+  'dark city rain neon night',
+  'candle flame dark room',
+  'ink water swirl black',
+  'abandoned dark room dust',
+  'dark sky storm clouds timelapse',
+  'dark hallway shadows',
+  'black silk fabric flowing',
+  'dark fireplace embers',
+  'foggy night street lamp',
+  'rain on glass black background',
+  'dark mirror reflection',
+  'shadow figure silhouette dark',
+  'dark stairs descending',
 ];
+
+// How many clips to fetch per query (Pexels free tier is generous).
+const PER_QUERY = 3;
+// Stop early once we already have at least this many cached clips.
+const TARGET_TOTAL = 30;
 
 interface PexelsVideoFile {
   link: string;
@@ -42,20 +60,36 @@ function pickBestFile(files: PexelsVideoFile[]): PexelsVideoFile | null {
   return [...mp4s].sort((a, b) => b.height - a.height)[0];
 }
 
-async function searchOne(query: string, apiKey: string): Promise<PexelsVideoFile | null> {
+async function searchMany(
+  query: string,
+  apiKey: string,
+  perQuery: number
+): Promise<PexelsVideoFile[]> {
   const res = await withRetry(
     () =>
       axios.get<PexelsSearchResponse>('https://api.pexels.com/videos/search', {
-        params: { query, per_page: 1, orientation: 'portrait' },
+        params: { query, per_page: perQuery, orientation: 'portrait' },
         headers: { Authorization: apiKey },
         timeout: 20000,
       }),
     2,
     1500
   );
-  const video = res.data.videos?.[0];
-  if (!video) return null;
-  return pickBestFile(video.video_files);
+  const videos = res.data.videos ?? [];
+  const files: PexelsVideoFile[] = [];
+  for (const v of videos) {
+    const f = pickBestFile(v.video_files);
+    if (f) files.push(f);
+  }
+  return files;
+}
+
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
 }
 
 async function downloadTo(url: string, outPath: string): Promise<void> {
@@ -73,7 +107,7 @@ export async function ensureBackgrounds(): Promise<string[]> {
   await fs.ensureDir(BG_DIR);
   const existing = (await fs.readdir(BG_DIR)).filter((f) => f.endsWith('.mp4'));
 
-  if (existing.length >= 5) {
+  if (existing.length >= TARGET_TOTAL) {
     return existing.map((f) => path.join(BG_DIR, f));
   }
 
@@ -84,27 +118,35 @@ export async function ensureBackgrounds(): Promise<string[]> {
     );
   }
 
-  log.info('📥 Downloading Pexels backgrounds...');
-  const downloaded: string[] = [];
+  log.info(`📥 Downloading Pexels backgrounds (have ${existing.length}, target ${TARGET_TOTAL})...`);
+  const downloaded: string[] = existing.map((f) => path.join(BG_DIR, f));
 
   for (let i = 0; i < QUERIES.length; i++) {
+    if (downloaded.length >= TARGET_TOTAL) break;
     const query = QUERIES[i];
-    const outPath = path.join(BG_DIR, `${i + 1}.mp4`);
-    if (await fs.pathExists(outPath)) {
-      downloaded.push(outPath);
-      continue;
-    }
+    const slug = slugify(query);
     try {
-      const file = await searchOne(query, apiKey);
-      if (!file) {
-        log.warn(`  no result for "${query}" — skipping`);
+      const files = await searchMany(query, apiKey, PER_QUERY);
+      if (files.length === 0) {
+        log.warn(`  no results for "${query}" — skipping`);
         continue;
       }
-      log.info(`  [${i + 1}/${QUERIES.length}] "${query}" → ${file.width}×${file.height} ${file.quality}`);
-      await downloadTo(file.link, outPath);
-      const size = (await fs.stat(outPath)).size;
-      log.info(`      saved ${path.basename(outPath)} (${(size / 1024 / 1024).toFixed(1)} MB)`);
-      downloaded.push(outPath);
+      for (let j = 0; j < files.length; j++) {
+        if (downloaded.length >= TARGET_TOTAL) break;
+        const file = files[j];
+        const outPath = path.join(BG_DIR, `${slug}-${j + 1}.mp4`);
+        if (await fs.pathExists(outPath)) {
+          if (!downloaded.includes(outPath)) downloaded.push(outPath);
+          continue;
+        }
+        log.info(
+          `  [${i + 1}/${QUERIES.length} #${j + 1}] "${query}" → ${file.width}×${file.height} ${file.quality}`
+        );
+        await downloadTo(file.link, outPath);
+        const size = (await fs.stat(outPath)).size;
+        log.info(`      saved ${path.basename(outPath)} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+        downloaded.push(outPath);
+      }
     } catch (err) {
       log.error(`  failed "${query}": ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -114,7 +156,7 @@ export async function ensureBackgrounds(): Promise<string[]> {
     throw new Error('Downloaded 0 backgrounds — check Pexels key and network');
   }
 
-  log.success(`Downloaded ${downloaded.length} background(s)`);
+  log.success(`Background pool size: ${downloaded.length}`);
   return downloaded;
 }
 
