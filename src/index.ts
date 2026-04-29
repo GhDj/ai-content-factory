@@ -128,12 +128,51 @@ async function main() {
     case 'scripts':
       await runScripts();
       break;
-    case 'voice':
-      await runVoice();
+    case 'voice': {
+      const args = process.argv.slice(3);
+      const ids: number[] = [];
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === '--id' && args[i + 1]) {
+          for (const part of args[++i].split(',')) {
+            const n = parseInt(part.trim(), 10);
+            if (Number.isFinite(n)) ids.push(n);
+          }
+        }
+      }
+      await runVoice({ onlyIds: ids.length ? ids : undefined });
       break;
-    case 'video':
-      await runVideos();
+    }
+    case 'video': {
+      // Flags: --id <n> (repeatable or comma-list), --force, --platform tiktok|youtube
+      const args = process.argv.slice(3);
+      const ids: number[] = [];
+      let force = false;
+      let platforms: Array<'tiktok' | 'youtube'> | undefined;
+      let backgroundOverride: string | undefined;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--force') {
+          force = true;
+        } else if (a === '--id' && args[i + 1]) {
+          for (const part of args[++i].split(',')) {
+            const n = parseInt(part.trim(), 10);
+            if (Number.isFinite(n)) ids.push(n);
+          }
+        } else if (a === '--platform' && args[i + 1]) {
+          const p = args[++i].trim();
+          if (p === 'tiktok' || p === 'youtube') platforms = [p];
+        } else if (a === '--background' && args[i + 1]) {
+          backgroundOverride = args[++i];
+        }
+      }
+      await runVideos({
+        onlyIds: ids.length ? ids : undefined,
+        force,
+        platforms,
+        backgroundOverride,
+      });
       break;
+    }
     case 'publish':
       await runPublish();
       break;

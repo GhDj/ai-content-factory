@@ -55,6 +55,21 @@ async function normalizePlayback(videoPath: string): Promise<void> {
   await fs.move(tmpPath, videoPath, { overwrite: true });
 }
 
+async function probeVideoDurationSeconds(videoPath: string): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      videoPath,
+    ]);
+    const seconds = parseFloat(stdout.trim());
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+  } catch {
+    return null;
+  }
+}
+
 async function stageAsset(srcPath: string, tag: string): Promise<{ url: string; stagedPath: string }> {
   await fs.ensureDir(PUBLIC_DIR);
   const id = `${tag}_${Date.now()}_${crypto.randomBytes(3).toString('hex')}${path.extname(srcPath)}`;
@@ -68,12 +83,39 @@ export async function renderVideoWithRemotion(
   script: ScriptWithAudio,
   words: Word[],
   audioDurationSeconds: number,
-  platform: 'tiktok' | 'youtube' = 'tiktok'
+  platform: 'tiktok' | 'youtube' = 'tiktok',
+  backgroundOverride?: string
 ): Promise<string> {
   await fs.ensureDir(VIDEO_DIR);
 
-  log.info(`  🎨 Getting background for ${platform} (FLUX.1 → Pexels fallback)...`);
-  const { path: backgroundPath, isImage: isBackgroundImage } = await getBackground(script.topic_title);
+  let backgroundPath: string;
+  let isBackgroundImage: boolean;
+  if (backgroundOverride) {
+    if (!(await fs.pathExists(backgroundOverride))) {
+      throw new Error(`--background path not found: ${backgroundOverride}`);
+    }
+    backgroundPath = backgroundOverride;
+    isBackgroundImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(backgroundOverride);
+    log.info(`  🎨 Using --background override: ${path.basename(backgroundPath)} (${isBackgroundImage ? 'image' : 'video'})`);
+  } else {
+    log.info(`  🎨 Getting background for ${platform} (FLUX.1 → Pexels fallback)...`);
+    const picked = await getBackground(script.topic_title);
+    backgroundPath = picked.path;
+    isBackgroundImage = picked.isImage;
+  }
+
+  // For video backgrounds, probe duration so we can loop them in Remotion
+  // when the clip is shorter than the composition.
+  let backgroundDurationFrames: number | undefined;
+  if (!isBackgroundImage) {
+    const seconds = await probeVideoDurationSeconds(backgroundPath);
+    if (seconds) {
+      backgroundDurationFrames = Math.max(FPS, Math.floor(seconds * FPS));
+      log.info(`  ⏱  Background clip duration: ${seconds.toFixed(2)}s (${backgroundDurationFrames} frames)`);
+    } else {
+      log.warn('  ⏱  Could not probe background duration — using 5s default loop');
+    }
+  }
 
   // Stage assets into ./public BEFORE bundling — bundle() snapshots publicDir.
   const staged: string[] = [];
@@ -98,6 +140,7 @@ export async function renderVideoWithRemotion(
   const inputProps = {
     backgroundPath: bgStaged.url,
     isBackgroundImage,
+    backgroundDurationFrames,
     thumbnailText: script.thumbnail_text,
     words,
     audioPath: audioStaged.url,

@@ -97,8 +97,12 @@ function prompt(rl: readline.Interface, q: string): Promise<string | null> {
   });
 }
 
-export async function runVoice(): Promise<void> {
-  const pending = getPendingScripts();
+export async function runVoice(opts: { onlyIds?: number[] } = {}): Promise<void> {
+  let pending = getPendingScripts();
+  if (opts.onlyIds && opts.onlyIds.length > 0) {
+    const set = new Set(opts.onlyIds);
+    pending = pending.filter((s) => set.has(s.id));
+  }
   if (pending.length === 0) {
     log.warn('No pending scripts to approve.');
     return;
@@ -148,7 +152,6 @@ export async function runAutoVoice(
 ): Promise<number[]> {
   const platform = opts.platform ?? 'tiktok';
   const pending = getPendingScripts().filter((s) => s.platform === platform);
-  // Newest first (we just generated these)
   pending.sort((a, b) => b.id - a.id);
   const toProcess = pending.slice(0, opts.count);
 
@@ -175,7 +178,6 @@ export async function runAutoVoice(
 }
 
 async function processApproved(s: ScriptWithTopic): Promise<SynthResult> {
-  // Use .mp3 extension since ElevenLabs returns MPEG audio by default
   const outPath = path.join(AUDIO_DIR, `script_${s.id}_${s.platform}.mp3`);
   const result = await synthesize(s.voice_script, outPath);
 

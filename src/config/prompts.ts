@@ -29,11 +29,44 @@ Tone: Calm, mysterious, slightly dramatic.
 Like a documentary narrator revealing hidden truths.
 Pacing: Let points breathe. Not rushed.
 
-Hook style for this script (use exactly this formula):
-{HOOK_FORMULA}
+HOOK RULES (most important part of the video):
+The hook must be completed in under 4 seconds.
+Lead with PAYOFF first, concept name second.
+
+Formula: [RESULT/PAYOFF] + [CONCEPT NAME] + [RELATABLE TENSION]
+
+Hook templates to rotate:
+1. PAYOFF FIRST:
+   '[Concept] will [specific result] instantly. Here is how.'
+   Example: 'The Grey Rock Method will make a narcissist
+   lose interest in you in days. Here is exactly how.'
+
+2. ACCUSATION HOOK:
+   '[Concept]. They [did this to you]. You did not even know.'
+   Example: 'Future Faking. They promised you everything.
+   They never meant a word of it.'
+
+3. QUESTION HOOK:
+   'Do you know why [relatable experience]? It has a name.'
+   Example: 'Do you know why you feel crazy after
+   arguments with them? It has a name. Gaslighting.'
+
+4. NUMBER HOOK:
+   'X things [concept] does to your brain. Number 3 will shock you.'
+
+Pick hook type based on target_emotion:
+- curiosity → QUESTION HOOK or PAYOFF FIRST
+- shock → ACCUSATION HOOK
+- fomo → PAYOFF FIRST
+- greed → NUMBER HOOK
+
+NO MORE slow openers like:
+'There is a psychological term called X and
+most people have never heard of it...'
+This is too slow and kills watch time.
 
 Structure:
-[HOOK - 3s] stops the scroll, creates fear or deep curiosity
+[HOOK - under 4s] payoff first, concept name, relatable tension. NO slow opener.
 [CONCEPT NAME - 5s] name the psychological term clearly
 [EXPLANATION - 15s] what it is, simple language, no jargon
 [3 SIGNS - 20s] numbered list, specific recognizable behaviors
@@ -92,6 +125,11 @@ Select the TOP 5 topics with highest viral potential for short-form video on the
 - Clear warning / self-protection value
 - Can be explained with a numbered list or case example
 - Emotionally sticky (shock, intrigue, relief)
+
+PRIORITY: Topics that name a specific psychological concept or term perform 3x better than generic advice.
+Always prefer topics with a named concept over general relationship or psychology advice.
+Examples of GOOD topics: 'Grey Rock Method', 'Future Faking', 'Hoovering', 'DARVO'
+Examples of WEAK topics: 'signs of toxic relationship', 'how to heal from breakup', 'red flags in dating'
 
 Return ONLY this JSON (no markdown, no explanation):
 {

@@ -13,6 +13,7 @@ interface Word {
 interface Props {
   backgroundPath: string;
   isBackgroundImage: boolean;
+  backgroundDurationFrames?: number;
   thumbnailText: string;
   words: Word[];
   audioPath: string;
@@ -23,6 +24,7 @@ interface Props {
 export const MindShieldVideo = ({
   backgroundPath,
   isBackgroundImage,
+  backgroundDurationFrames,
   thumbnailText,
   words,
   audioPath,
@@ -32,7 +34,11 @@ export const MindShieldVideo = ({
 
   return (
     <AbsoluteFill style={{ backgroundColor: '#000', width, height }}>
-      <Background path={backgroundPath} isImage={isBackgroundImage} />
+      <Background
+        path={backgroundPath}
+        isImage={isBackgroundImage}
+        backgroundDurationFrames={backgroundDurationFrames}
+      />
       <ThumbnailText text={thumbnailText} />
       <Subtitles words={words} />
       <Watermark />

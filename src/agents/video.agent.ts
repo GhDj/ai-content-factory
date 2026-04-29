@@ -309,11 +309,12 @@ async function renderVideo(
   outPath: string,
   platform: 'tiktok' | 'youtube',
   words: Word[],
-  duration: number
+  duration: number,
+  backgroundOverride?: string
 ): Promise<'remotion' | 'ffmpeg'> {
   try {
     const { renderVideoWithRemotion } = await import('./remotion-video.agent');
-    await renderVideoWithRemotion(script, words, duration, platform);
+    await renderVideoWithRemotion(script, words, duration, platform, backgroundOverride);
     log.info(`      renderer: remotion (${platform})`);
     return 'remotion';
   } catch (err) {
@@ -347,20 +348,42 @@ function videoPathFor(scriptId: number, platform: VideoPlatform): string {
   return path.join(VIDEO_DIR, `script_${scriptId}_${platform}.mp4`);
 }
 
-export async function runVideos(opts: { onlyIds?: number[] } = {}): Promise<void> {
+export async function runVideos(
+  opts: {
+    onlyIds?: number[];
+    force?: boolean;
+    platforms?: VideoPlatform[];
+    backgroundOverride?: string;
+  } = {}
+): Promise<void> {
   await fs.ensureDir(VIDEO_DIR);
   await ensureBackgrounds();
+
+  const targetPlatforms = opts.platforms ?? [...VIDEO_PLATFORMS];
 
   const all = getApprovedScriptsWithAudio();
   const scoped = opts.onlyIds
     ? all.filter((s) => opts.onlyIds!.includes(s.id))
     : all;
 
-  // A script is "pending" if either platform file is missing
+  // --force: nuke existing renders for the targeted scripts/platforms first
+  if (opts.force) {
+    for (const s of scoped) {
+      for (const p of targetPlatforms) {
+        const f = videoPathFor(s.id, p);
+        if (await fs.pathExists(f)) {
+          await fs.remove(f);
+          log.info(`  🗑  removed ${path.basename(f)} (force)`);
+        }
+      }
+    }
+  }
+
+  // A script is "pending" if any targeted platform file is missing
   const pending: ScriptWithAudio[] = [];
   for (const s of scoped) {
     const anyMissing = await Promise.all(
-      VIDEO_PLATFORMS.map((p) => fs.pathExists(videoPathFor(s.id, p)).then((x) => !x))
+      targetPlatforms.map((p) => fs.pathExists(videoPathFor(s.id, p)).then((x) => !x))
     );
     if (anyMissing.some(Boolean)) pending.push(s);
   }
@@ -388,7 +411,7 @@ export async function runVideos(opts: { onlyIds?: number[] } = {}): Promise<void
       continue;
     }
 
-    for (const platform of VIDEO_PLATFORMS) {
+    for (const platform of targetPlatforms) {
       const outPath = videoPathFor(s.id, platform);
       if (await fs.pathExists(outPath)) {
         log.info(`    ✓ ${platform} already rendered — skipping`);
@@ -396,7 +419,7 @@ export async function runVideos(opts: { onlyIds?: number[] } = {}): Promise<void
       }
       const start = Date.now();
       try {
-        await renderVideo(s, outPath, platform, words, duration);
+        await renderVideo(s, outPath, platform, words, duration, opts.backgroundOverride);
         const took = ((Date.now() - start) / 1000).toFixed(1);
         const size = (await fs.stat(outPath)).size;
         log.success(`🎬 ${platform} video ready: ${outPath} (${(size / 1024 / 1024).toFixed(2)} MB, ${took}s)`);

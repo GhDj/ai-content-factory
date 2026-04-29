@@ -12,6 +12,7 @@ export const Root = () => (
     defaultProps={{
       backgroundPath: '',
       isBackgroundImage: true,
+      backgroundDurationFrames: 150,
       thumbnailText: 'MIND SHIELD',
       words: [] as Array<{ word: string; start: number; end: number }>,
       audioPath: '',

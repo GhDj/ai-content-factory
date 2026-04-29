@@ -12,6 +12,10 @@ const CACHE_INDEX_PATH = path.join(AI_BG_DIR, 'cache-index.json');
 // and grows the pool toward this number when quota allows.
 const TARGET_POOL_SIZE = 4;
 
+// Probability of picking a Pexels stock video instead of an image, even
+// when the image pool is full. 0 = always image, 1 = always video.
+const VIDEO_PICK_RATIO = 0.4;
+
 const CINEMATIC_STYLE =
   'cinematic vertical format 9:16, ultra dark moody atmosphere, dramatic shadows, ' +
   'psychological thriller aesthetic, 8k quality, no text, no people';
@@ -241,7 +245,19 @@ export async function getBackground(topic: string): Promise<BackgroundResult> {
   let pool = await prunePool(cache[key] ?? []);
 
   // Pool already large enough — pick at random and skip the API call.
+  // With probability VIDEO_PICK_RATIO, swap in a Pexels stock video so
+  // the rotation includes motion clips, not just stills.
   if (pool.length >= TARGET_POOL_SIZE) {
+    if (Math.random() < VIDEO_PICK_RATIO) {
+      try {
+        const videoPath = await getRandomBackground();
+        log.info(`  🎬 Video pick (ratio=${VIDEO_PICK_RATIO}) → ${path.basename(videoPath)}`);
+        return { path: videoPath, isImage: false };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`  Video pick failed (${msg.slice(0, 100)}). Falling back to image pool.`);
+      }
+    }
     const pick = pool[Math.floor(Math.random() * pool.length)];
     log.info(`  📦 Pool[${key}] size=${pool.length} → ${path.basename(pick)}`);
     cache[key] = pool;

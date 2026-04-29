@@ -1,11 +1,15 @@
-import { AbsoluteFill, Video, Img, useVideoConfig, useCurrentFrame, interpolate } from 'remotion';
+import { AbsoluteFill, OffthreadVideo, Loop, Img, useVideoConfig, useCurrentFrame, interpolate } from 'remotion';
 
 interface Props {
   path: string;
   isImage: boolean;
+  // Source clip duration in frames — required to loop video backgrounds
+  // when the composition is longer than the clip. Falls back to 150
+  // (5 s @ 30 fps) which matches the shortest Pexels clip we accept.
+  backgroundDurationFrames?: number;
 }
 
-export const Background = ({ path, isImage }: Props) => {
+export const Background = ({ path, isImage, backgroundDurationFrames }: Props) => {
   const frame = useCurrentFrame();
   const { durationInFrames } = useVideoConfig();
 
@@ -44,9 +48,19 @@ export const Background = ({ path, isImage }: Props) => {
     );
   }
 
+  // Loop the clip until the composition ends. OffthreadVideo decodes
+  // through ffmpeg (reliable for arbitrary Pexels codecs); muted so the
+  // clip's native audio never bleeds into the voiceover mix.
+  const loopFrames = Math.max(30, backgroundDurationFrames ?? 150);
   return (
     <AbsoluteFill style={{ backgroundColor: '#000' }}>
-      <Video src={path} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      <Loop durationInFrames={loopFrames}>
+        <OffthreadVideo
+          src={path}
+          muted
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+        />
+      </Loop>
       <div
         style={{
           position: 'absolute',
