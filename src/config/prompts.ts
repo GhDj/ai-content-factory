@@ -21,13 +21,31 @@ export const HOOK_FORMULAS: Record<string, { name: string; template: string }> =
   },
 };
 
+/**
+ * Per-pillar tone overlay injected into the script generation prompt.
+ * Each pillar has its own emotional register — protective for manipulation
+ * topics, educational for cognitive bias, empowering for self mastery, etc.
+ */
+export const PILLAR_TONES: Record<string, string> = {
+  manipulation:       "Protective, alarming. 'Watch out for this.'",
+  cognitive_bias:     "Educational, mind-blowing. 'Your brain does this without you knowing.'",
+  body_language:      "Practical, immediately useful. 'You can use this today.'",
+  power:              "Aspirational, strategic. 'This is how power actually works.'",
+  cult:               "Shocking, revelatory. 'This is darker than you think.'",
+  social_engineering: "Protective, urgent. 'They are doing this to you right now.'",
+  self_mastery:       "Empowering, hopeful. 'You have more control than you think.'",
+};
+
 export const DARK_PSYCH_SCRIPT_PROMPT = `SYSTEM:
-You write scripts for a FACELESS Dark Psychology awareness TikTok/YouTube Shorts channel called @MindShieldDaily.
+You write scripts for a FACELESS Dark Psychology awareness TikTok/YouTube Shorts channel called @mindshieldaily.
 Format: voiceover narration over dark moody visuals.
 
 Tone: Calm, mysterious, slightly dramatic.
 Like a documentary narrator revealing hidden truths.
 Pacing: Let points breathe. Not rushed.
+
+Pillar-specific tone overlay (applies on top of the base tone above):
+{PILLAR_TONE}
 
 HOOK RULES (most important part of the video):
 The hook must be completed in under 4 seconds.
@@ -72,7 +90,7 @@ Structure:
 [3 SIGNS - 20s] numbered list, specific recognizable behaviors
 [REAL SCENARIO - 10s] relatable everyday example
 [PROTECTION TIP - 7s] one clear action they can take
-[CTA - 5s] 'Follow MindShieldDaily — new drop every day'
+[CTA - 5s] 'Follow Mind Shield Daily — new drop every day'  (spell with spaces so TTS reads it correctly)
 
 Stage directions to include:
 [DARK BACKGROUND], [TEXT OVERLAY: term], [NUMBERED LIST: 1. 2. 3.],
@@ -100,12 +118,12 @@ Return ONLY this JSON:
   "script_text": "full script with stage directions",
   "voice_script": "clean script with ALL stage directions removed, for TTS only",
   "caption": "max 130 chars, intriguing, 1 emoji",
-  "hashtags": ["#darkpsychology", "#psychology", "#mindshielddaily", "#narcissist", "#manipulation", "#mentalhealth", "#toxicrelationship", "#psychologyfacts"],
+  "hashtags": ["#darkpsychology", "#psychology", "#mindshieldaily", "#narcissist", "#manipulation", "#mentalhealth", "#toxicrelationship", "#psychologyfacts"],
   "thumbnail_text": "4-5 WORDS ALL CAPS — ominous or warning tone",
   "duration_seconds": 60
 }`;
 
-export const DARK_PSYCH_RESEARCH_PROMPT = `SYSTEM: You are a content strategist for a FACELESS Dark Psychology awareness TikTok/YouTube Shorts channel called @MindShieldDaily.
+export const DARK_PSYCH_RESEARCH_PROMPT = `SYSTEM: You are a content strategist for a FACELESS Dark Psychology awareness TikTok/YouTube Shorts channel called @mindshieldaily.
 Niche: recognizing and defending yourself against manipulation tactics.
 Audience: adults 18-45 interested in self-protection, relationships, psychology.
 Style: Faceless — dark moody visuals + AI voiceover. Documentary narrator tone.
@@ -131,6 +149,15 @@ Always prefer topics with a named concept over general relationship or psycholog
 Examples of GOOD topics: 'Grey Rock Method', 'Future Faking', 'Hoovering', 'DARVO'
 Examples of WEAK topics: 'signs of toxic relationship', 'how to heal from breakup', 'red flags in dating'
 
+Each topic belongs to ONE pillar from this list:
+- manipulation       — DARVO, love bombing, future faking, silent treatment, coercive control, weaponized incompetence
+- cognitive_bias     — sunk cost, halo effect, dunning-kruger, anchoring, recency, cognitive dissonance
+- body_language      — microexpressions, mirroring, eye contact, fake smiles, lying tells
+- power              — 48 laws of power, silence as leverage, saying no, commanding respect
+- cult               — BITE model, thought stopping, us-vs-them, recruitment tactics
+- social_engineering — pretexting, urgency, social proof, authority bias, foot-in-the-door, scams
+- self_mastery       — grey rock, no contact, stoicism, boundaries, radical acceptance, detachment
+
 Return ONLY this JSON (no markdown, no explanation):
 {
   "topics": [
@@ -140,7 +167,8 @@ Return ONLY this JSON (no markdown, no explanation):
       "url": "original url or empty string",
       "viral_angle": "one sentence — why this hooks a viewer",
       "hook_idea": "the exact opening 3 seconds of the video as spoken words",
-      "target_emotion": "shock|curiosity|fomo|greed|satisfaction"
+      "target_emotion": "shock|curiosity|fomo|greed|satisfaction",
+      "pillar": "manipulation|cognitive_bias|body_language|power|cult|social_engineering|self_mastery"
     }
   ]
 }`;

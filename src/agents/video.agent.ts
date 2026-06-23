@@ -47,7 +47,7 @@ const VIDEO_H = 1920;
 const CHAR_RATIO = 0.55;
 const SPACE_RATIO = 0.3;
 
-// Subtitle config — MindShieldDaily dark-psychology look
+// Subtitle config — Mind Shield Daily dark-psychology look
 // Unified size for all words (no jumping) + fixed chunk position + red karaoke
 const SUB_FONT_SIZE = 56;
 const SUB_Y_FACTOR = 0.72;                 // 72% from top
@@ -136,7 +136,8 @@ function chunkLayoutUpper(words: string[], fontSize: number): { totalWidth: numb
 function buildStaticOverlays(
   thumbFile: string,
   hookFile: string,
-  watermarkFile: string
+  watermarkFile: string,
+  opts: { includeTextWatermark?: boolean } = {}
 ): string {
   // Thumbnail banner at top 15% of frame (y ≈ 0.15 * 1920 ≈ 288)
   const bannerY = 260;
@@ -148,7 +149,7 @@ function buildStaticOverlays(
     "if(lt(t,3.5),1," +
     "if(lt(t,4),(4-t)/0.5,0))))";
 
-  return [
+  const overlays: string[] = [
     // Semi-transparent dark box behind thumbnail text — opacity 0.75 per spec
     `drawbox=x=0:y=${bannerY}:w=iw:h=${bannerH}:color=black@0.75:t=fill`,
     // Thumbnail text: 78px white bold, centered in the banner
@@ -159,11 +160,16 @@ function buildStaticOverlays(
     `drawtext=fontfile='${FONT_PATH}':textfile='${hookFile}':` +
       `fontsize=44:fontcolor=white:borderw=3:bordercolor=black:` +
       `x=(w-text_w)/2:y=h-420:alpha='${hookAlpha}'`,
-    // Watermark: "MindShieldDaily" 24px white @ 40% opacity, full duration
-    `drawtext=fontfile='${FONT_PATH}':textfile='${watermarkFile}':` +
-      `fontsize=24:fontcolor=white@0.40:borderw=1:bordercolor=black@0.40:` +
-      `x=w-text_w-30:y=h-60`,
-  ].join(',');
+  ];
+  if (opts.includeTextWatermark !== false) {
+    // Watermark fallback (no logo file): "mindshieldaily" 24px white @ 40% opacity
+    overlays.push(
+      `drawtext=fontfile='${FONT_PATH}':textfile='${watermarkFile}':` +
+        `fontsize=24:fontcolor=white@0.40:borderw=1:bordercolor=black@0.40:` +
+        `x=w-text_w-30:y=h-60`
+    );
+  }
+  return overlays.join(',');
 }
 
 async function buildSubtitleOverlays(
@@ -242,10 +248,17 @@ async function renderVideoWithFFmpeg(
   const tmpFiles: string[] = [];
   const thumbFile = await writeTempText(script.thumbnail_text);
   const hookFile = await writeTempText(script.hook);
-  const watermarkFile = await writeTempText('MindShieldDaily');
+  const watermarkFile = await writeTempText('mindshieldaily');
   tmpFiles.push(thumbFile, hookFile, watermarkFile);
 
-  const staticOverlays = buildStaticOverlays(thumbFile, hookFile, watermarkFile);
+  const LOGO_FILE = path.join(process.cwd(), 'assets', 'branding', 'logo.png');
+  const hasLogo = await fs.pathExists(LOGO_FILE);
+
+  // When the brand logo is available, skip the text-only watermark drawtext —
+  // the logo overlay (added below) takes its place with a handle line under it.
+  const staticOverlays = buildStaticOverlays(thumbFile, hookFile, watermarkFile, {
+    includeTextWatermark: !hasLogo,
+  });
   const subtitleOverlays = await buildSubtitleOverlays(words, tmpFiles);
   const vOverlays = subtitleOverlays ? `${staticOverlays},${subtitleOverlays}` : staticOverlays;
 
@@ -256,7 +269,8 @@ async function renderVideoWithFFmpeg(
   try {
     log.info(
       `      bg=${path.basename(bgSrc)} duration=${duration.toFixed(1)}s platform=${platform}` +
-        (musicTrack ? ` music=${path.basename(musicTrack)}` : ' music=none')
+        (musicTrack ? ` music=${path.basename(musicTrack)}` : ' music=none') +
+        (hasLogo ? ' logo=yes' : ' logo=no')
     );
 
     const args: string[] = ['-y'];
@@ -268,16 +282,34 @@ async function renderVideoWithFFmpeg(
       // Input 2: music (looped indefinitely so it outlasts any voiceover length)
       args.push('-stream_loop', '-1', '-i', musicTrack);
     }
+    // Logo input goes last so audio input indices stay stable.
+    let logoIdx = -1;
+    if (hasLogo) {
+      logoIdx = args.filter((a) => a === '-i').length; // current input count
+      args.push('-i', LOGO_FILE);
+    }
 
-    // Filter graph: video overlays + audio mix (when music present)
+    // Filter graph: video overlays + (optional) logo overlay + audio mix.
     const audioFilter = musicTrack
       ? `[2:a]volume=0.12,afade=t=in:st=0:d=1,afade=t=out:st=${fadeOutStart.toFixed(2)}:d=2[music];` +
         `[1:a]volume=1.0[voice];` +
         `[music][voice]amix=inputs=2:duration=shortest:dropout_transition=0[audio]`
       : '';
-    const filterComplex = audioFilter
-      ? `[0:v]${vOverlays}[v];${audioFilter}`
-      : `[0:v]${vOverlays}[v]`;
+
+    let videoChain: string;
+    if (hasLogo) {
+      // Scale logo to 80×80, force 30% alpha, overlay bottom-right, then draw
+      // the @mindshieldaily handle below it.
+      videoChain =
+        `[${logoIdx}:v]scale=80:80,format=rgba,colorchannelmixer=aa=0.3[logo];` +
+        `[0:v]${vOverlays}[bg0];` +
+        `[bg0][logo]overlay=x=W-w-30:y=H-h-80,` +
+        `drawtext=fontfile='${FONT_PATH}':text='@mindshieldaily':` +
+          `fontsize=20:fontcolor=white@0.3:x=W-text_w-25:y=H-45[v]`;
+    } else {
+      videoChain = `[0:v]${vOverlays}[v]`;
+    }
+    const filterComplex = audioFilter ? `${videoChain};${audioFilter}` : videoChain;
 
     args.push('-filter_complex', filterComplex);
     args.push('-map', '[v]');

@@ -7,6 +7,7 @@ import { getRandomBackground } from './backgrounds';
 
 const AI_BG_DIR = path.join(process.cwd(), 'assets', 'backgrounds');
 const CACHE_INDEX_PATH = path.join(AI_BG_DIR, 'cache-index.json');
+const USED_HISTORY_PATH = path.join(AI_BG_DIR, 'used-history.json');
 
 // Per-key target pool size. getBackground picks at random from the pool,
 // and grows the pool toward this number when quota allows.
@@ -166,6 +167,80 @@ async function saveCache(cache: CacheShape): Promise<void> {
   await fs.writeFile(CACHE_INDEX_PATH, JSON.stringify(cache, null, 2));
 }
 
+interface UsedHistory {
+  paths: string[];
+  pexelsImageIds: number[];
+  pexelsVideoIds: number[];
+}
+
+async function loadUsedHistory(): Promise<UsedHistory> {
+  try {
+    const raw = await fs.readFile(USED_HISTORY_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    return {
+      paths: Array.isArray(parsed.paths) ? parsed.paths.filter((x: unknown): x is string => typeof x === 'string') : [],
+      pexelsImageIds: Array.isArray(parsed.pexelsImageIds) ? parsed.pexelsImageIds.filter((x: unknown): x is number => typeof x === 'number') : [],
+      pexelsVideoIds: Array.isArray(parsed.pexelsVideoIds) ? parsed.pexelsVideoIds.filter((x: unknown): x is number => typeof x === 'number') : [],
+    };
+  } catch {
+    return { paths: [], pexelsImageIds: [], pexelsVideoIds: [] };
+  }
+}
+
+async function saveUsedHistory(h: UsedHistory): Promise<void> {
+  await fs.ensureDir(AI_BG_DIR);
+  await fs.writeFile(USED_HISTORY_PATH, JSON.stringify(h, null, 2));
+}
+
+function extractPexelsId(filename: string, kind: 'image' | 'video'): number | null {
+  const re = kind === 'image' ? /_pexels_(\d+)\./ : /_pexvid_(\d+)\./;
+  const m = path.basename(filename).match(re);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Mark a background as "consumed" by a successful render:
+ *  - Append to used-history (paths + parsed Pexels IDs so we don't re-pull).
+ *  - Delete the file from disk.
+ *  - Remove it from every key's pool in cache-index.
+ *
+ * Safe to call repeatedly on the same path. Errors are logged but never thrown
+ * so a successful render is never marked as failed due to cleanup trouble.
+ */
+export async function recordBackgroundUsed(usedPath: string): Promise<void> {
+  try {
+    const history = await loadUsedHistory();
+    if (!history.paths.includes(usedPath)) history.paths.push(usedPath);
+
+    const imgId = extractPexelsId(usedPath, 'image');
+    if (imgId != null && !history.pexelsImageIds.includes(imgId)) history.pexelsImageIds.push(imgId);
+
+    const vidId = extractPexelsId(usedPath, 'video');
+    if (vidId != null && !history.pexelsVideoIds.includes(vidId)) history.pexelsVideoIds.push(vidId);
+
+    await saveUsedHistory(history);
+
+    // Remove from cache-index pools.
+    const cache = await loadCache();
+    let changed = false;
+    for (const [k, v] of Object.entries(cache)) {
+      const filtered = v.filter((p) => p !== usedPath);
+      if (filtered.length !== v.length) {
+        cache[k] = filtered;
+        changed = true;
+      }
+    }
+    if (changed) await saveCache(cache);
+
+    if (await fs.pathExists(usedPath)) {
+      await fs.remove(usedPath);
+    }
+    log.info(`  ♻️  Background retired: ${path.basename(usedPath)}`);
+  } catch (err) {
+    log.warn(`  retire-background failed for ${usedPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function prunePool(pool: string[]): Promise<string[]> {
   const out: string[] = [];
   for (const p of pool) {
@@ -259,10 +334,11 @@ export async function getBackground(topic: string): Promise<BackgroundResult> {
       }
     }
     const pick = pool[Math.floor(Math.random() * pool.length)];
-    log.info(`  📦 Pool[${key}] size=${pool.length} → ${path.basename(pick)}`);
+    const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(pick);
+    log.info(`  📦 Pool[${key}] size=${pool.length} → ${path.basename(pick)} (${isImage ? 'image' : 'video'})`);
     cache[key] = pool;
     await saveCache(cache);
-    return { path: pick, isImage: true };
+    return { path: pick, isImage };
   }
 
   // Pool below target — try to add a fresh variant.
@@ -277,8 +353,9 @@ export async function getBackground(topic: string): Promise<BackgroundResult> {
     const msg = err instanceof Error ? err.message : String(err);
     if (pool.length > 0) {
       const pick = pool[Math.floor(Math.random() * pool.length)];
-      log.warn(`  HuggingFace failed (${msg.slice(0, 100)}). Reusing pool[${key}] → ${path.basename(pick)}`);
-      return { path: pick, isImage: true };
+      const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(pick);
+      log.warn(`  HuggingFace failed (${msg.slice(0, 100)}). Reusing pool[${key}] → ${path.basename(pick)} (${isImage ? 'image' : 'video'})`);
+      return { path: pick, isImage };
     }
     log.warn(`  HuggingFace failed and pool[${key}] empty. Falling back to Pexels video.`);
     const videoPath = await getRandomBackground();
@@ -290,35 +367,102 @@ export async function getBackground(topic: string): Promise<BackgroundResult> {
  * Quota-aware prefetch: grows each key's pool toward TARGET_POOL_SIZE.
  * Stops on first 402. Returns counts per outcome.
  */
-export async function prefetchAllBackgrounds(delayMs = 3000): Promise<{
+export type BackgroundSource = 'huggingface' | 'pexels' | 'pexels-video';
+
+export interface PrefetchOpts {
+  /** Reset only entries matching the source's filename pattern (deletes those files and removes them from the cache index) before fetching. */
+  reset?: boolean;
+  /** Override TARGET_POOL_SIZE for this run (still per-key). */
+  target?: number;
+}
+
+/**
+ * Returns a regex matching only files produced by the given source. Used by
+ * --reset so resetting one source doesn't wipe entries from another.
+ */
+function fileBelongsToSource(filename: string, source: BackgroundSource): boolean {
+  const base = path.basename(filename);
+  if (source === 'pexels') return /_pexels_\d+\./.test(base);
+  if (source === 'pexels-video') return /_pexvid_\d+\./.test(base);
+  // huggingface: timestamp-based name like bg_<key>_<ts>_<rand>.png
+  return /_\d{10,}_\d+\.png$/.test(base) || (!/_pexels_/.test(base) && !/_pexvid_/.test(base) && /\.png$/.test(base));
+}
+
+async function resetPoolsForSource(source: BackgroundSource): Promise<number> {
+  const cache = await loadCache();
+  let removed = 0;
+  for (const key of TOPIC_KEYS) {
+    const before = cache[key] ?? [];
+    const keep: string[] = [];
+    for (const p of before) {
+      if (fileBelongsToSource(p, source)) {
+        try {
+          if (await fs.pathExists(p)) {
+            await fs.remove(p);
+            removed++;
+          }
+        } catch {
+          /* ignore */
+        }
+      } else {
+        keep.push(p);
+      }
+    }
+    cache[key] = keep;
+  }
+  await saveCache(cache);
+  return removed;
+}
+
+export async function prefetchAllBackgrounds(
+  delayMs = 3000,
+  source: BackgroundSource = 'huggingface',
+  opts: PrefetchOpts = {}
+): Promise<{
   generated: number;
   total: number;
   quotaHitAt: TopicKey | null;
+  removedOnReset: number;
 }> {
+  let removedOnReset = 0;
+  if (opts.reset) {
+    removedOnReset = await resetPoolsForSource(source);
+    log.info(`🧹 Reset removed ${removedOnReset} ${source} file(s) from pools.`);
+  }
+
+  const target = opts.target ?? TARGET_POOL_SIZE;
   const cache = await loadCache();
   let generated = 0;
   let quotaHitAt: TopicKey | null = null;
   const keys = [...TOPIC_KEYS];
-  const total = keys.length * TARGET_POOL_SIZE;
+  const total = keys.length * target;
 
   outer: for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     let pool = await prunePool(cache[key] ?? []);
+    const sourcePoolCount = () => pool.filter((p) => fileBelongsToSource(p, source)).length;
 
-    while (pool.length < TARGET_POOL_SIZE) {
+    while (sourcePoolCount() < target) {
       try {
-        const imagePath = await generateBackgroundImage(key);
+        const imagePath =
+          source === 'pexels' ? await fetchPexelsImageForKey(key, pool) :
+          source === 'pexels-video' ? await fetchPexelsVideoForKey(key, pool) :
+          await generateBackgroundImage(key);
+        if (!imagePath) {
+          log.warn(`  [${key}] no fresh ${source} candidate found — moving on.`);
+          break;
+        }
         pool.push(imagePath);
         cache[key] = pool;
         await saveCache(cache);
         generated++;
-        log.success(`  [${key} ${pool.length}/${TARGET_POOL_SIZE}] generated ✓`);
+        log.success(`  [${key} ${sourcePoolCount()}/${target}] (${source}) ✓`);
         await new Promise((r) => setTimeout(r, delayMs));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('402') || /Payment Required/i.test(msg)) {
           quotaHitAt = key;
-          log.warn(`  [${key}] HuggingFace quota hit (402). Stopping.`);
+          log.warn(`  [${key}] ${source} quota hit (402). Stopping.`);
           break outer;
         }
         log.error(`  [${key}] failed: ${msg.slice(0, 160)}`);
@@ -329,5 +473,200 @@ export async function prefetchAllBackgrounds(delayMs = 3000): Promise<{
   }
 
   await saveCache(cache);
-  return { generated, total, quotaHitAt };
+  return { generated, total, quotaHitAt, removedOnReset };
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Pexels image source (alternative to HuggingFace FLUX.1)
+// ───────────────────────────────────────────────────────────────────
+
+/**
+ * Search queries per topic key. Pexels works best with short concrete
+ * phrases — these are tuned to dark, moody, minimal compositions.
+ */
+const PEXELS_QUERIES: Record<TopicKey, string[]> = {
+  narcissist:   ['broken mirror dark', 'cracked mask', 'empty throne dark', 'shattered glass black'],
+  gaslighting:  ['foggy corridor dark', 'flickering candle dark', 'dark hallway mist', 'distorted clock dark'],
+  manipulation: ['chess pieces dark', 'puppet strings shadow', 'tangled black thread', 'dark hand smoke'],
+  trauma:       ['stormy ocean night', 'shattered window rain', 'abandoned dark room', 'dark forest fog'],
+  lovebombing:  ['wilting roses dark', 'blown out candles smoke', 'dark rose petals', 'torn letter dark'],
+  silent:       ['empty dark room chair', 'unanswered phone dark', 'two empty chairs dark', 'long dark table'],
+  darktriad:    ['three shadows wall', 'black playing cards', 'dark triangle fog', 'silhouettes frosted glass'],
+  lying:        ['dark mirror reflection', 'cracked porcelain mask', 'shadow figure dark', 'fingers crossed dark'],
+  cult:         ['empty cathedral dark', 'black candles circle', 'hooded silhouettes fog', 'dark altar smoke'],
+  covert:       ['frosted glass silhouette', 'sheer curtain shadow', 'half open door dark', 'half mask shadow'],
+  boundary:     ['dark wall light crack', 'iron gate fog', 'chalk line dark floor', 'dark fence night sky'],
+  anxiety:      ['moving shadows dark', 'blurred clock dark', 'dark stairwell flicker', 'dark water ripple'],
+  default:      ['dark abstract smoke', 'black ink water', 'dark velvet light', 'black void fog'],
+};
+
+interface PexelsPhotoSrc {
+  original: string;
+  large2x: string;
+  large: string;
+  medium: string;
+  portrait: string;
+}
+
+interface PexelsPhoto {
+  id: number;
+  width: number;
+  height: number;
+  src: PexelsPhotoSrc;
+}
+
+interface PexelsPhotoSearchResponse {
+  photos: PexelsPhoto[];
+}
+
+async function searchPexelsImages(query: string, apiKey: string, perPage = 10): Promise<PexelsPhoto[]> {
+  const res = await axios.get<PexelsPhotoSearchResponse>('https://api.pexels.com/v1/search', {
+    params: { query, per_page: perPage, orientation: 'portrait' },
+    headers: { Authorization: apiKey },
+    timeout: 20000,
+  });
+  return res.data.photos ?? [];
+}
+
+async function downloadImage(url: string, outPath: string): Promise<void> {
+  const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer', timeout: 60000 });
+  await fs.writeFile(outPath, Buffer.from(res.data));
+}
+
+/**
+ * Pull a single fresh Pexels portrait image for the given topic key.
+ * Tries each search query until it finds a photo whose ID isn't already in
+ * the existing pool (filenames embed the photo ID for de-dup). Returns
+ * absolute path to the downloaded file, or null if nothing new found.
+ */
+interface PexelsVideoFile {
+  link: string;
+  quality: string;
+  width: number;
+  height: number;
+  file_type: string;
+}
+
+interface PexelsVideo {
+  id: number;
+  width: number;
+  height: number;
+  video_files: PexelsVideoFile[];
+}
+
+interface PexelsVideoSearchResponse {
+  videos: PexelsVideo[];
+}
+
+async function searchPexelsVideos(query: string, apiKey: string, perPage = 10): Promise<PexelsVideo[]> {
+  const res = await axios.get<PexelsVideoSearchResponse>('https://api.pexels.com/videos/search', {
+    params: { query, per_page: perPage, orientation: 'portrait' },
+    headers: { Authorization: apiKey },
+    timeout: 20000,
+  });
+  return res.data.videos ?? [];
+}
+
+function pickBestVideoFile(files: PexelsVideoFile[]): PexelsVideoFile | null {
+  const mp4s = files.filter((f) => f.file_type === 'video/mp4');
+  if (mp4s.length === 0) return null;
+  const hd = mp4s.find((f) => f.quality === 'hd');
+  if (hd) return hd;
+  return [...mp4s].sort((a, b) => b.height - a.height)[0];
+}
+
+async function downloadStream(url: string, outPath: string): Promise<void> {
+  const res = await axios.get(url, { responseType: 'stream', timeout: 120000 });
+  await new Promise<void>((resolve, reject) => {
+    const ws = fs.createWriteStream(outPath);
+    res.data.pipe(ws);
+    ws.on('finish', () => resolve());
+    ws.on('error', reject);
+    res.data.on('error', reject);
+  });
+}
+
+/**
+ * Pull a single fresh Pexels portrait video for the given topic key.
+ * De-dupes via the photo ID embedded in the cached filename.
+ */
+async function fetchPexelsVideoForKey(key: TopicKey, existingPool: string[]): Promise<string | null> {
+  const apiKey = process.env.PEXELS_API_KEY;
+  if (!apiKey || apiKey === 'your_key_here') {
+    throw new Error('PEXELS_API_KEY missing or placeholder in .env');
+  }
+
+  const queries = PEXELS_QUERIES[key] ?? PEXELS_QUERIES.default;
+  const history = await loadUsedHistory();
+  const usedIds = new Set<string>([
+    ...existingPool.map((p) => extractPexelsId(p, 'video')).filter((x): x is number => x != null).map(String),
+    ...history.pexelsVideoIds.map(String),
+  ]);
+
+  const shuffled = [...queries].sort(() => Math.random() - 0.5);
+
+  for (const query of shuffled) {
+    let videos: PexelsVideo[];
+    try {
+      videos = await searchPexelsVideos(query, apiKey);
+    } catch (err) {
+      log.warn(`  Pexels video search failed for "${query}": ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+
+    const fresh = videos.filter((v) => !usedIds.has(String(v.id)));
+    if (fresh.length === 0) continue;
+
+    const pick = fresh[Math.floor(Math.random() * fresh.length)];
+    const file = pickBestVideoFile(pick.video_files);
+    if (!file) continue;
+
+    const outPath = path.join(AI_BG_DIR, `bg_${key}_pexvid_${pick.id}.mp4`);
+    await fs.ensureDir(AI_BG_DIR);
+    await downloadStream(file.link, outPath);
+    log.info(`    🎬 Pexels[${key}] "${query}" → ${pick.id} (${file.width}×${file.height} ${file.quality})`);
+    return outPath;
+  }
+
+  return null;
+}
+
+async function fetchPexelsImageForKey(key: TopicKey, existingPool: string[]): Promise<string | null> {
+  const apiKey = process.env.PEXELS_API_KEY;
+  if (!apiKey || apiKey === 'your_key_here') {
+    throw new Error('PEXELS_API_KEY missing or placeholder in .env');
+  }
+
+  const queries = PEXELS_QUERIES[key] ?? PEXELS_QUERIES.default;
+  const history = await loadUsedHistory();
+  const usedIds = new Set<string>([
+    ...existingPool.map((p) => extractPexelsId(p, 'image')).filter((x): x is number => x != null).map(String),
+    ...history.pexelsImageIds.map(String),
+  ]);
+
+  // Shuffle queries so repeated runs don't hit the same one first.
+  const shuffled = [...queries].sort(() => Math.random() - 0.5);
+
+  for (const query of shuffled) {
+    let photos: PexelsPhoto[];
+    try {
+      photos = await searchPexelsImages(query, apiKey);
+    } catch (err) {
+      log.warn(`  Pexels search failed for "${query}": ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+
+    const fresh = photos.filter((p) => !usedIds.has(String(p.id)));
+    if (fresh.length === 0) continue;
+
+    const pick = fresh[Math.floor(Math.random() * fresh.length)];
+    const url = pick.src.portrait || pick.src.large2x || pick.src.large || pick.src.original;
+    const outPath = path.join(AI_BG_DIR, `bg_${key}_pexels_${pick.id}.jpg`);
+    await fs.ensureDir(AI_BG_DIR);
+    await downloadImage(url, outPath);
+    log.info(`    🖼  Pexels[${key}] "${query}" → ${pick.id} (${pick.width}×${pick.height})`);
+    return outPath;
+  }
+
+  return null;
 }

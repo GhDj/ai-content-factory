@@ -1,29 +1,21 @@
 {
-  "gaslighting": [
-    "assets/backgrounds/bg_gaslighting_seed.png"
-  ],
+  "gaslighting": [],
   "narcissist": [
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_narcissist_1777105454144_23.png",
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_narcissist_1777105460006_665.png",
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_narcissist_1777105466630_176.png",
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_narcissist_1777105924678_916.png"
+    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_narcissist_pexvid_8111929.mp4"
   ],
-  "trauma": [
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_trauma_1777105864297_269.png",
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_trauma_1777105882786_595.png",
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_trauma_1777230453025_300.png",
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_trauma_1777230474744_249.png"
-  ],
-  "cult": [
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_cult_1777230563504_274.png"
-  ],
+  "trauma": [],
+  "cult": [],
   "darktriad": [
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_darktriad_1777230612381_815.png"
+    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_darktriad_pexvid_11349329.mp4"
   ],
-  "default": [
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_default_1777230665126_754.png"
+  "default": [],
+  "manipulation": [],
+  "lying": [],
+  "lovebombing": [
+    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_lovebombing_pexvid_36114346.mp4"
   ],
-  "manipulation": [
-    "/Users/jalel/Documents/Projects/ai-content-factory/assets/backgrounds/bg_manipulation_1777275020892_221.png"
-  ]
+  "silent": [],
+  "covert": [],
+  "boundary": [],
+  "anxiety": []
 }

@@ -1,5 +1,8 @@
 import axios, { AxiosError } from 'axios';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import fs from 'fs-extra';
+import os from 'os';
 import path from 'path';
 import readline from 'readline';
 import { log } from '../utils/logger';
@@ -11,9 +14,14 @@ import {
   type ScriptWithTopic,
 } from '../db/repository';
 
+const execFileP = promisify(execFile);
+
 const AUDIO_DIR = path.join(process.cwd(), 'output', 'audio');
+const REF_AUDIO = path.join(process.cwd(), 'assets', 'voice', 'reference.wav');
+const REF_TEXT_FILE = path.join(process.cwd(), 'assets', 'voice', 'reference.txt');
 
 type SynthResult = 'ok' | 'quota' | 'blocked';
+type Engine = 'f5tts' | 'elevenlabs' | 'say';
 
 function parseAxiosErrBody(err: AxiosError): string {
   const data = err.response?.data;
@@ -29,10 +37,113 @@ function parseAxiosErrBody(err: AxiosError): string {
 }
 
 /**
- * Dark-psychology voice settings — calmer, more mysterious, documentary tone.
- * Read fresh at each synthesize() call so .env edits take effect without restart.
+ * Pronunciation-fix substitutions before TTS. The brand "Mind Shield Daily"
+ * gets read as gibberish when handed to TTS as a single token (legacy
+ * 'MindShieldDaily' or the current 'mindshieldaily'). Always force the
+ * spaced display form for the voiceover.
  */
-async function synthesize(voiceScript: string, outPath: string): Promise<SynthResult> {
+const PRONUNCIATION_FIXES: Array<[RegExp, string]> = [
+  [/\bMindShieldDaily\b/g, 'Mind Shield Daily'],
+  [/\b@MindShieldDaily\b/g, 'Mind Shield Daily'],
+  [/\b@?mindshieldaily\b/gi, 'Mind Shield Daily'],
+];
+
+function cleanText(text: string): string {
+  let out = text.replace(/\[.*?\]/g, '');
+  for (const [pat, rep] of PRONUNCIATION_FIXES) out = out.replace(pat, rep);
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+// ───────────────────────────────────────────────────────────────────
+// F5-TTS (primary): local model on Apple Silicon (mps)
+// ───────────────────────────────────────────────────────────────────
+
+const F5TTS_CANDIDATES = [
+  process.env.F5TTS_BIN,
+  'f5-tts_infer-cli',
+  path.join(os.homedir(), '.local/bin/f5-tts_infer-cli'),
+].filter(Boolean) as string[];
+
+async function resolveF5TTSBin(): Promise<string | null> {
+  for (const cand of F5TTS_CANDIDATES) {
+    try {
+      if (cand.includes('/')) {
+        if (await fs.pathExists(cand)) return cand;
+      } else {
+        await execFileP('which', [cand]);
+        return cand;
+      }
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+async function f5ttsAvailable(): Promise<boolean> {
+  if (!(await resolveF5TTSBin())) return false;
+  if (!(await fs.pathExists(REF_AUDIO))) return false;
+  if (!(await fs.pathExists(REF_TEXT_FILE))) return false;
+  return true;
+}
+
+export async function generateWithF5TTS(
+  voiceScript: string,
+  outPath: string
+): Promise<void> {
+  const refText = (await fs.readFile(REF_TEXT_FILE, 'utf8')).trim();
+  const tmpWav = path.join(os.tmpdir(), `f5tts_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`);
+
+  const bin = await resolveF5TTSBin();
+  if (!bin) throw new Error('f5-tts_infer-cli not found on PATH or ~/.local/bin');
+
+  await fs.ensureDir(path.dirname(outPath));
+
+  const tmpDir = os.tmpdir();
+  const tmpName = path.basename(tmpWav);
+  // torchcodec inside f5-tts needs ffmpeg's libavutil on macOS — point dyld at Homebrew's lib dir.
+  const dyldPath = [
+    '/opt/homebrew/lib',
+    '/usr/local/lib',
+    process.env.DYLD_FALLBACK_LIBRARY_PATH,
+  ].filter(Boolean).join(':');
+
+  await execFileP(
+    bin,
+    [
+      '--model', process.env.F5TTS_MODEL ?? 'F5TTS_v1_Base',
+      '--ref_audio', REF_AUDIO,
+      '--ref_text', refText,
+      '--gen_text', cleanText(voiceScript),
+      '--output_dir', tmpDir,
+      '--output_file', tmpName,
+      '--device', 'mps',
+      '--speed', process.env.F5TTS_SPEED ?? '0.9',
+    ],
+    {
+      timeout: 900000,
+      env: { ...process.env, DYLD_FALLBACK_LIBRARY_PATH: dyldPath },
+    }
+  );
+
+  try {
+    // Convert WAV → M4A (AAC 192k) for compatibility with rest of pipeline.
+    await execFileP('ffmpeg', [
+      '-y', '-i', tmpWav,
+      '-c:a', 'aac', '-b:a', '192k',
+      outPath,
+    ]);
+  } finally {
+    await fs.remove(tmpWav).catch(() => {});
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// ElevenLabs (fallback): cloud API
+// ───────────────────────────────────────────────────────────────────
+
+async function generateWithElevenLabs(
+  voiceScript: string,
+  outPath: string
+): Promise<SynthResult> {
   const voiceId = process.env.ELEVENLABS_VOICE_ID;
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!voiceId || !apiKey) {
@@ -82,6 +193,81 @@ async function synthesize(voiceScript: string, outPath: string): Promise<SynthRe
   }
 }
 
+// ───────────────────────────────────────────────────────────────────
+// macOS say (last resort)
+// ───────────────────────────────────────────────────────────────────
+
+const SAY_VOICE = process.env.MAC_SAY_VOICE ?? 'Daniel';
+const SAY_RATE = process.env.MAC_SAY_RATE ?? '175';
+
+async function generateWithSay(voiceScript: string, outPath: string): Promise<void> {
+  const tmpAiff = path.join(os.tmpdir(), `say_${Date.now()}_${Math.random().toString(36).slice(2)}.aiff`);
+  await fs.ensureDir(path.dirname(outPath));
+  try {
+    await execFileP('say', ['-v', SAY_VOICE, '-r', SAY_RATE, '-o', tmpAiff, voiceScript]);
+    await execFileP('ffmpeg', [
+      '-y', '-i', tmpAiff,
+      '-c:a', 'aac', '-b:a', '192k',
+      outPath,
+    ]);
+  } finally {
+    await fs.remove(tmpAiff).catch(() => {});
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Cascade entry point
+// ───────────────────────────────────────────────────────────────────
+
+interface SynthOutcome {
+  engine: Engine;
+  outPath: string;
+}
+
+async function synthesizeCascade(
+  voiceScript: string,
+  scriptId: number,
+  platform: string
+): Promise<SynthOutcome> {
+  const m4aPath = path.join(AUDIO_DIR, `script_${scriptId}_${platform}.m4a`);
+  const mp3Path = path.join(AUDIO_DIR, `script_${scriptId}_${platform}.mp3`);
+  // Apply pronunciation fixes once so all engines benefit (cleanText is also
+  // called inside generateWithF5TTS — duplicate substitution is a no-op).
+  voiceScript = cleanText(voiceScript);
+
+  // 1) F5-TTS — outputs M4A
+  if (await f5ttsAvailable()) {
+    try {
+      log.info(`  🎙️  F5-TTS (local, mps)...`);
+      await generateWithF5TTS(voiceScript, m4aPath);
+      return { engine: 'f5tts', outPath: m4aPath };
+    } catch (err) {
+      log.warn(`  F5-TTS failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // 2) ElevenLabs — outputs MP3
+  if (process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_VOICE_ID) {
+    try {
+      log.info(`  🎙️  ElevenLabs...`);
+      const result = await generateWithElevenLabs(voiceScript, mp3Path);
+      if (result === 'ok') return { engine: 'elevenlabs', outPath: mp3Path };
+      log.warn(`  ElevenLabs returned ${result}; falling back.`);
+    } catch (err) {
+      log.warn(`  ElevenLabs failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // 3) macOS say — outputs M4A
+  log.info(`  🎙️  macOS say (${SAY_VOICE})...`);
+  await generateWithSay(voiceScript, m4aPath);
+  return { engine: 'say', outPath: m4aPath };
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Public agent entry points
+// ───────────────────────────────────────────────────────────────────
+
 function prompt(rl: readline.Interface, q: string): Promise<string | null> {
   return new Promise((resolve) => {
     const onClose = () => resolve(null);
@@ -108,8 +294,7 @@ export async function runVoice(opts: { onlyIds?: number[] } = {}): Promise<void>
     return;
   }
 
-  const voiceId = process.env.ELEVENLABS_VOICE_ID;
-  log.info(`🎙️  ${pending.length} script(s) pending approval · voice=${voiceId?.slice(0, 8)}...`);
+  log.info(`🎙️  ${pending.length} script(s) pending approval`);
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -132,21 +317,13 @@ export async function runVoice(opts: { onlyIds?: number[] } = {}): Promise<void>
         continue;
       }
 
-      const result = await processApproved(s);
-      if (result === 'blocked') {
-        log.warn('Stopping — fix ElevenLabs credentials and re-run.');
-        break;
-      }
+      await processApproved(s);
     }
   } finally {
     rl.close();
   }
 }
 
-/**
- * Auto-generate audio for the N newest pending scripts of a given platform.
- * Non-interactive — used by the scheduled pipeline.
- */
 export async function runAutoVoice(
   opts: { count: number; platform?: 'tiktok' | 'youtube' } = { count: 2, platform: 'tiktok' }
 ): Promise<number[]> {
@@ -164,12 +341,8 @@ export async function runAutoVoice(
   const processedIds: number[] = [];
   for (const s of toProcess) {
     try {
-      const result = await processApproved(s);
-      if (result === 'ok') processedIds.push(s.id);
-      if (result === 'blocked') {
-        log.warn('Stopping auto-voice — ElevenLabs blocked.');
-        break;
-      }
+      await processApproved(s);
+      processedIds.push(s.id);
     } catch (err) {
       log.error(`  auto-voice failed for script ${s.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -177,21 +350,9 @@ export async function runAutoVoice(
   return processedIds;
 }
 
-async function processApproved(s: ScriptWithTopic): Promise<SynthResult> {
-  const outPath = path.join(AUDIO_DIR, `script_${s.id}_${s.platform}.mp3`);
-  const result = await synthesize(s.voice_script, outPath);
-
-  if (result === 'quota') {
-    log.warn(`ElevenLabs quota reached. Skipping audio for script ${s.id}.`);
-    return result;
-  }
-  if (result === 'blocked') {
-    log.warn(`ElevenLabs blocked (account/permissions). Skipping script ${s.id}.`);
-    return result;
-  }
-
-  saveAudioFile(s.id, outPath);
+async function processApproved(s: ScriptWithTopic): Promise<void> {
+  const outcome = await synthesizeCascade(s.voice_script, s.id, s.platform);
+  saveAudioFile(s.id, outcome.outPath);
   approveScript(s.id);
-  log.success(`Audio saved: ${outPath}`);
-  return result;
+  log.success(`Audio saved (engine=${outcome.engine}): ${outcome.outPath}`);
 }

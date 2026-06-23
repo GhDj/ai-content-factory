@@ -7,12 +7,14 @@ export interface TopicInput {
   viral_angle?: string;
   hook_idea?: string;
   target_emotion?: string;
+  pillar?: string;
   score?: number;
 }
 
 export interface Topic extends TopicInput {
   id: number;
   target_emotion: string;
+  pillar: string;
   used: number;
   created_at: string;
 }
@@ -27,6 +29,8 @@ export interface ScriptInput {
   hashtags: string;
   thumbnail_text: string;
   duration_seconds: number;
+  series_id?: string | null;
+  episode_number?: number | null;
 }
 
 export type ViralVerdict = 'HIGH' | 'MEDIUM' | 'LOW';
@@ -41,6 +45,8 @@ export interface Script extends ScriptInput {
   viral_score?: number | null;
   viral_verdict?: ViralVerdict | null;
   viral_reason?: string | null;
+  series_id?: string | null;
+  episode_number?: number | null;
 }
 
 export interface ScriptWithTopic extends Script {
@@ -49,8 +55,8 @@ export interface ScriptWithTopic extends Script {
 
 export function saveTopic(t: TopicInput): number {
   const stmt = db.prepare(`
-    INSERT INTO topics (title, source, url, viral_angle, hook_idea, target_emotion, score)
-    VALUES (@title, @source, @url, @viral_angle, @hook_idea, @target_emotion, @score)
+    INSERT INTO topics (title, source, url, viral_angle, hook_idea, target_emotion, pillar, score)
+    VALUES (@title, @source, @url, @viral_angle, @hook_idea, @target_emotion, @pillar, @score)
   `);
   const result = stmt.run({
     title: t.title,
@@ -59,9 +65,43 @@ export function saveTopic(t: TopicInput): number {
     viral_angle: t.viral_angle ?? '',
     hook_idea: t.hook_idea ?? '',
     target_emotion: t.target_emotion ?? 'curiosity',
+    pillar: t.pillar ?? 'manipulation',
     score: t.score ?? 0,
   });
   return Number(result.lastInsertRowid);
+}
+
+/**
+ * Returns the distinct pillars used in topics created within the last `days`
+ * days, oldest day first. Used by the research agent to enforce rotation.
+ */
+export function getRecentPillars(days = 3): string[] {
+  return (db
+    .prepare(
+      `SELECT pillar FROM topics
+       WHERE created_at >= datetime('now', ?)
+       GROUP BY pillar
+       ORDER BY MAX(created_at) DESC`
+    )
+    .all(`-${days} days`) as Array<{ pillar: string }>)
+    .map((r) => r.pillar)
+    .filter(Boolean);
+}
+
+/**
+ * Pillars used in topics created strictly today (UTC date match). Used to
+ * decide whether we've already pulled from the same pillar twice today.
+ */
+export function getTodaysPillars(): string[] {
+  return (db
+    .prepare(
+      `SELECT pillar FROM topics
+       WHERE date(created_at) = date('now')
+       GROUP BY pillar`
+    )
+    .all() as Array<{ pillar: string }>)
+    .map((r) => r.pillar)
+    .filter(Boolean);
 }
 
 export function getUnusedTopics(): Topic[] {
@@ -82,13 +122,31 @@ export function saveScript(s: ScriptInput): number {
   const stmt = db.prepare(`
     INSERT INTO scripts
       (topic_id, platform, hook, script_text, voice_script, caption,
-       hashtags, thumbnail_text, duration_seconds)
+       hashtags, thumbnail_text, duration_seconds, series_id, episode_number)
     VALUES
       (@topic_id, @platform, @hook, @script_text, @voice_script, @caption,
-       @hashtags, @thumbnail_text, @duration_seconds)
+       @hashtags, @thumbnail_text, @duration_seconds, @series_id, @episode_number)
   `);
-  const result = stmt.run(s);
+  const result = stmt.run({
+    ...s,
+    series_id: s.series_id ?? null,
+    episode_number: s.episode_number ?? null,
+  });
   return Number(result.lastInsertRowid);
+}
+
+export function getNextEpisodeNumber(seriesId: string): number {
+  const row = db
+    .prepare(`SELECT MAX(episode_number) AS max_ep FROM scripts WHERE series_id = ?`)
+    .get(seriesId) as { max_ep: number | null } | undefined;
+  return (row?.max_ep ?? 0) + 1;
+}
+
+export function getSeriesEpisodeCount(seriesId: string): number {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS c FROM scripts WHERE series_id = ? AND platform = 'tiktok'`)
+    .get(seriesId) as { c: number };
+  return row.c;
 }
 
 export function getPendingScripts(): ScriptWithTopic[] {
@@ -140,6 +198,13 @@ export function getApprovedScriptsWithAudio(): ScriptWithAudio[] {
       ORDER BY s.id ASC
     `)
     .all() as ScriptWithAudio[];
+}
+
+export function getAudioPath(scriptId: number): string | null {
+  const row = db
+    .prepare(`SELECT file_path FROM audio_files WHERE script_id = ?`)
+    .get(scriptId) as { file_path: string } | undefined;
+  return row?.file_path ?? null;
 }
 
 export function getUnpublishedApprovedScripts(): ScriptWithTopic[] {

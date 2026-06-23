@@ -8,7 +8,7 @@ import crypto from 'crypto';
 
 const execFileAsync = promisify(execFile);
 import { log } from '../utils/logger';
-import { getBackground } from '../utils/ai-background';
+import { getBackground, recordBackgroundUsed } from '../utils/ai-background';
 import { getRandomMusicTrack } from '../utils/music';
 import type { ScriptWithAudio } from '../db/repository';
 import type { Word } from '../utils/transcribe';
@@ -135,6 +135,16 @@ export async function renderVideoWithRemotion(
     }
   }
 
+  // Stage the brand logo so the Remotion <Watermark /> can fetch it. Optional —
+  // if the file is missing, the watermark falls back to text-only.
+  let logoUrl = '';
+  const logoSrc = path.join(process.cwd(), 'assets', 'branding', 'logo.png');
+  if (await fs.pathExists(logoSrc)) {
+    const logoStaged = await stageAsset(logoSrc, `logo_${script.id}_${platform}`);
+    staged.push(logoStaged.stagedPath);
+    logoUrl = logoStaged.url;
+  }
+
   const serveUrl = await buildBundle();
 
   const inputProps = {
@@ -146,6 +156,7 @@ export async function renderVideoWithRemotion(
     audioPath: audioStaged.url,
     audioDurationSeconds,
     musicPath: musicUrl,
+    logoPath: logoUrl,
   };
 
   try {
@@ -184,6 +195,12 @@ export async function renderVideoWithRemotion(
     // stutter on scrubs when there's only 1 keyframe per clip. Re-mux with
     // explicit keyframe interval + TV-range YUV. ~3-5s overhead per video.
     await normalizePlayback(outputPath);
+
+    // Retire the picked background so it doesn't get reused. Skip when the
+    // user explicitly chose one via --background (that's a user-managed file).
+    if (!backgroundOverride) {
+      await recordBackgroundUsed(backgroundPath);
+    }
 
     process.stdout.write('\n');
     return outputPath;

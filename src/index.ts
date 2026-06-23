@@ -4,6 +4,8 @@ import { runResearch } from './agents/research.agent';
 import { runScripts } from './agents/script.agent';
 import { runVoice, runAutoVoice } from './agents/voice.agent';
 import { runVideos } from './agents/video.agent';
+import { runCarousel } from './agents/carousel.agent';
+import { runImages } from './agents/image-post.agent';
 import { runPublish, runAutoPublish } from './publishers';
 import { authenticateYouTube } from './auth/youtube-auth';
 import { authenticateTikTok } from './auth/tiktok-auth';
@@ -25,6 +27,28 @@ function scoreCell(score?: number | null): string {
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s.padEnd(n) : s.slice(0, n - 1) + '…';
+}
+
+/**
+ * --manual <youtube|tiktok|both|none>
+ *   default: tiktok-only manual (existing behavior).
+ *   `youtube` adds youtube manual on top of tiktok manual.
+ *   `both` is identical to `youtube` here for clarity.
+ *   `none` disables manual mode for both (uses APIs / dry-run).
+ *   `tiktok` is the default and listed for symmetry.
+ */
+function parsePublishOpts(args: string[]): { youtubeManual?: boolean; tiktokManual?: boolean } {
+  const opts: { youtubeManual?: boolean; tiktokManual?: boolean } = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--manual' && args[i + 1]) {
+      const v = args[++i].trim().toLowerCase();
+      if (v === 'youtube' || v === 'yt') opts.youtubeManual = true;
+      else if (v === 'tiktok' || v === 'tt') opts.tiktokManual = true;
+      else if (v === 'both' || v === 'all') { opts.youtubeManual = true; opts.tiktokManual = true; }
+      else if (v === 'none') { opts.youtubeManual = false; opts.tiktokManual = false; }
+    }
+  }
+  return opts;
 }
 
 function renderScriptTable(scripts: ScriptWithTopic[]): string {
@@ -88,6 +112,13 @@ async function main() {
       const producedIds = await runScripts();
       const voicedIds = await runAutoVoice({ count, platform: 'tiktok' });
       await runVideos({ onlyIds: voicedIds });
+      // Generate matching photo carousels for the same scripts.
+      if (voicedIds.length > 0) {
+        log.info(`🖼️  Generating carousels for ${voicedIds.length} script(s)...`);
+        await runCarousel({ onlyIds: voicedIds });
+        log.info(`📸 Generating image posts for ${voicedIds.length} script(s)...`);
+        await runImages({ onlyIds: voicedIds });
+      }
 
       // Quality breakdown on scripts generated in this run
       const produced = getScriptsByIds(producedIds);
@@ -120,7 +151,7 @@ async function main() {
       break;
     }
     case 'auto-publish':
-      await runAutoPublish();
+      await runAutoPublish(parsePublishOpts(process.argv.slice(3)));
       break;
     case 'research':
       await runResearch();
@@ -174,8 +205,45 @@ async function main() {
       break;
     }
     case 'publish':
-      await runPublish();
+      await runPublish(parsePublishOpts(process.argv.slice(3)));
       break;
+    case 'carousel': {
+      const args = process.argv.slice(3);
+      const ids: number[] = [];
+      let force = false;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--force') {
+          force = true;
+        } else if (a === '--id' && args[i + 1]) {
+          for (const part of args[++i].split(',')) {
+            const n = parseInt(part.trim(), 10);
+            if (Number.isFinite(n)) ids.push(n);
+          }
+        }
+      }
+      await runCarousel({ onlyIds: ids.length ? ids : undefined, force });
+      break;
+    }
+    case 'images': {
+      const args = process.argv.slice(3);
+      const ids: number[] = [];
+      let force = false;
+      let all = false;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--force') force = true;
+        else if (a === '--all') all = true;
+        else if (a === '--id' && args[i + 1]) {
+          for (const part of args[++i].split(',')) {
+            const n = parseInt(part.trim(), 10);
+            if (Number.isFinite(n)) ids.push(n);
+          }
+        }
+      }
+      await runImages({ onlyIds: ids.length ? ids : undefined, force, all });
+      break;
+    }
     case 'auth:youtube':
       await authenticateYouTube();
       break;
@@ -186,7 +254,7 @@ async function main() {
       printQueue();
       break;
     default:
-      log.warn('Usage: npm run <pipeline [count]|research|scripts|voice|video|publish|auto-publish|queue>');
+      log.warn('Usage: npm run <pipeline [count]|research|scripts|voice|video|carousel|images|publish|auto-publish|queue>');
   }
 }
 

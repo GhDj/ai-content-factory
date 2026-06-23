@@ -19,6 +19,7 @@ interface Props {
   audioPath: string;
   audioDurationSeconds: number;
   musicPath?: string;
+  logoPath?: string;
 }
 
 export const MindShieldVideo = ({
@@ -29,6 +30,7 @@ export const MindShieldVideo = ({
   words,
   audioPath,
   musicPath,
+  logoPath,
 }: Props) => {
   const { width, height } = useVideoConfig();
 
@@ -41,7 +43,7 @@ export const MindShieldVideo = ({
       />
       <ThumbnailText text={thumbnailText} />
       <Subtitles words={words} />
-      <Watermark />
+      <Watermark logoUrl={logoPath} />
       {/* Background music (YouTube only) — quiet bed, loops if shorter than video */}
       {musicPath ? <Audio src={musicPath} volume={0.12} loop /> : null}
       {/* Voiceover — full volume, rendered after music so it's mixed on top */}

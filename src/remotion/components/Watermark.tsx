@@ -1,6 +1,10 @@
-import { AbsoluteFill } from 'remotion';
+import { AbsoluteFill, Img } from 'remotion';
 
-export const Watermark = () => (
+interface Props {
+  logoUrl?: string;
+}
+
+export const Watermark = ({ logoUrl }: Props) => (
   <AbsoluteFill>
     <div
       style={{
@@ -8,15 +12,34 @@ export const Watermark = () => (
         bottom: 48,
         right: 36,
         opacity: 0.35,
-        fontFamily: 'sans-serif',
-        fontWeight: 700,
-        fontSize: 26,
-        color: '#FFFFFF',
-        letterSpacing: 1,
-        textTransform: 'uppercase',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 6,
       }}
     >
-      MindShieldDaily
+      {logoUrl ? (
+        <Img
+          src={logoUrl}
+          style={{
+            width: 80,
+            height: 80,
+            objectFit: 'contain',
+          }}
+        />
+      ) : null}
+      <span
+        style={{
+          fontFamily: 'sans-serif',
+          fontWeight: 700,
+          fontSize: 18,
+          color: '#FFFFFF',
+          letterSpacing: 1,
+          textTransform: 'uppercase',
+        }}
+      >
+        @mindshieldaily
+      </span>
     </div>
   </AbsoluteFill>
 );

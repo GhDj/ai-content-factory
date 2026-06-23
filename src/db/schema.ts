@@ -50,12 +50,15 @@ db.exec(`
 // Migrations — idempotent ALTERs for columns added after initial release
 const migrations = [
   `ALTER TABLE topics ADD COLUMN target_emotion TEXT DEFAULT 'curiosity'`,
+  `ALTER TABLE topics ADD COLUMN pillar TEXT DEFAULT 'manipulation'`,
   `ALTER TABLE scripts ADD COLUMN youtube_url TEXT`,
   `ALTER TABLE scripts ADD COLUMN tiktok_publish_id TEXT`,
   `ALTER TABLE scripts ADD COLUMN published_at TEXT`,
   `ALTER TABLE scripts ADD COLUMN viral_score INTEGER`,
   `ALTER TABLE scripts ADD COLUMN viral_verdict TEXT`,
   `ALTER TABLE scripts ADD COLUMN viral_reason TEXT`,
+  `ALTER TABLE scripts ADD COLUMN series_id TEXT`,
+  `ALTER TABLE scripts ADD COLUMN episode_number INTEGER`,
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch { /* column already exists */ }

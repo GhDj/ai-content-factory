@@ -29,7 +29,7 @@ function hashtagsToTags(hashtags: string): string[] {
 
 function buildTitle(script: ScriptWithTopic): string {
   const base = script.thumbnail_text.trim();
-  const suffix = '#MindShieldDaily #shorts';
+  const suffix = '#mindshieldaily #shorts';
   if (base.toLowerCase().includes('#shorts')) return base;
   return `${base} ${suffix}`;
 }
@@ -41,7 +41,7 @@ function buildDescription(script: ScriptWithTopic): string {
     script.hashtags,
     '',
     '━━━━━━━━━━━━━━━━━',
-    '🧠 MindShieldDaily — Learn to protect your mind.',
+    '🧠 Mind Shield Daily — Learn to protect your mind.',
     'New dark psychology drop every day.',
     'Subscribe to never miss one.',
     '━━━━━━━━━━━━━━━━━',

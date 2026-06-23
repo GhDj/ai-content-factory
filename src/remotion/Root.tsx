@@ -13,11 +13,12 @@ export const Root = () => (
       backgroundPath: '',
       isBackgroundImage: true,
       backgroundDurationFrames: 150,
-      thumbnailText: 'MIND SHIELD',
+      thumbnailText: 'MIND SHIELD DAILY',
       words: [] as Array<{ word: string; start: number; end: number }>,
       audioPath: '',
       audioDurationSeconds: 60,
       musicPath: '',
+      logoPath: '',
     }}
   />
 );

@@ -6,10 +6,12 @@ import { log } from '../utils/logger';
 import {
   getUnpublishedApprovedScripts,
   markScriptPublished,
+  getAudioPath,
   type ScriptWithTopic,
 } from '../db/repository';
 import { publishToYoutube } from './youtube.publisher';
 import { publishToTiktok } from './tiktok.publisher';
+import { saveYoutubeGuide } from './youtube-guide';
 
 const VIDEO_DIR = path.join(process.cwd(), 'output', 'videos');
 const YT_TOKEN_PATH = path.join(process.cwd(), 'assets', 'youtube-token.json');
@@ -46,7 +48,15 @@ function youtubeVideoPath(scriptId: number): string {
   return path.join(VIDEO_DIR, `script_${scriptId}_youtube.mp4`);
 }
 
-async function publishVideo(script: ScriptWithTopic): Promise<PublishOutcome> {
+interface PublishOpts {
+  youtubeManual?: boolean;
+  tiktokManual?: boolean;
+}
+
+async function publishVideo(
+  script: ScriptWithTopic,
+  opts: PublishOpts = {}
+): Promise<PublishOutcome> {
   const out: PublishOutcome = {
     youtubeUrl: null,
     tiktokPublishId: null,
@@ -57,11 +67,26 @@ async function publishVideo(script: ScriptWithTopic): Promise<PublishOutcome> {
   const ytPath = youtubeVideoPath(script.id);
   const ttPath = tiktokVideoPath(script.id);
 
-  // YouTube — uses _youtube.mp4 (with music)
+  // YouTube — uses _youtube.mp4 (with music). In manual mode, fall back to
+  // _tiktok.mp4 if a youtube-specific render doesn't exist (the typical
+  // single-render flow uploads the same clip to both platforms).
+  const ytExists = await fs.pathExists(ytPath);
+  const ytGuidePath = ytExists ? ytPath : ttPath;
+  const haveYtSource = ytExists || (opts.youtubeManual && (await fs.pathExists(ttPath)));
+
   if (script.youtube_url) {
     log.info(`  ✓ YouTube already published: ${script.youtube_url} — skipping`);
     out.youtubeUrl = script.youtube_url;
-  } else if (!(await fs.pathExists(ytPath))) {
+  } else if (!haveYtSource) {
+    log.warn(`  ⚠ YouTube video missing: ${path.basename(ytPath)}`);
+  } else if (opts.youtubeManual) {
+    try {
+      const res = await saveYoutubeGuide(ytGuidePath, script);
+      out.youtubeUrl = res.url;
+    } catch (err) {
+      log.error(`  YouTube guide failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else if (!ytExists) {
     log.warn(`  ⚠ YouTube video missing: ${path.basename(ytPath)}`);
   } else if (await youtubeConfigured()) {
     try {
@@ -141,7 +166,7 @@ async function getPendingPublishes(): Promise<Pending[]> {
  * scheduler. Publishes to YouTube first, then TikTok. Logs URLs and outcome.
  * If no ready video exists, logs a warning and returns without throwing.
  */
-export async function runAutoPublish(): Promise<void> {
+export async function runAutoPublish(opts: PublishOpts = {}): Promise<void> {
   const pending = await getPendingPublishes();
   if (pending.length === 0) {
     log.warn('⚠ Auto-publish: no video ready in queue — skipping.');
@@ -154,7 +179,7 @@ export async function runAutoPublish(): Promise<void> {
   if (next.youtubePath) log.info(`   yt: ${path.basename(next.youtubePath)} (${(next.youtubeSize / 1024 / 1024).toFixed(2)} MB)`);
   if (next.tiktokPath)  log.info(`   tt: ${path.basename(next.tiktokPath)} (${(next.tiktokSize / 1024 / 1024).toFixed(2)} MB)`);
 
-  const outcome = await publishVideo(s);
+  const outcome = await publishVideo(s, opts);
   const isDryRun = outcome.youtubeDryRun || outcome.tiktokDryRun;
 
   if (!isDryRun) {
@@ -162,7 +187,12 @@ export async function runAutoPublish(): Promise<void> {
   }
 
   log.info('📊 Auto-publish summary');
-  log.info(`   YouTube: ${outcome.youtubeUrl ?? (outcome.youtubeDryRun ? 'dry-run' : 'failed')}`);
+  const ytLine = outcome.youtubeUrl
+    ? (outcome.youtubeUrl.startsWith('manual_yt_')
+        ? `guide at output/ready-to-post/script_${s.id}_youtube.txt`
+        : outcome.youtubeUrl)
+    : (outcome.youtubeDryRun ? 'dry-run' : 'failed');
+  log.info(`   YouTube: ${ytLine}`);
   const ttLine = outcome.tiktokPublishId
     ? (outcome.tiktokPublishId.startsWith('manual_')
         ? `guide at output/ready-to-post/script_${s.id}.txt`
@@ -171,13 +201,20 @@ export async function runAutoPublish(): Promise<void> {
   log.info(`   TikTok:  ${ttLine}`);
 
   if (outcome.youtubeUrl || outcome.tiktokPublishId) {
+    // Clean up the audio file now that the video is published
+    const audioPath = getAudioPath(s.id);
+    if (audioPath && await fs.pathExists(audioPath)) {
+      await fs.remove(audioPath);
+      log.info(`  🗑  Deleted audio: ${path.basename(audioPath)}`);
+    }
+
     log.success(`Auto-publish complete for script ${s.id}`);
   } else {
     log.warn(`Auto-publish produced no live URLs for script ${s.id}`);
   }
 }
 
-export async function runPublish(): Promise<void> {
+export async function runPublish(opts: PublishOpts = {}): Promise<void> {
   const pending = await getPendingPublishes();
   if (pending.length === 0) {
     log.warn('No published-ready videos found. Generate via `npm run video` first.');
@@ -185,9 +222,10 @@ export async function runPublish(): Promise<void> {
   }
 
   const ytOK = await youtubeConfigured();
-  const ttOK = await tiktokConfigured();
+  const ytMode = opts.youtubeManual ? 'MANUAL-GUIDE' : (ytOK ? 'API' : 'DRY-RUN');
+  const ttMode = opts.tiktokManual === false ? 'API' : 'MANUAL-GUIDE';
   log.info(
-    `📤 ${pending.length} video(s) ready. YouTube=${ytOK ? 'API' : 'DRY-RUN'}  TikTok=MANUAL-GUIDE`
+    `📤 ${pending.length} video(s) ready. YouTube=${ytMode}  TikTok=${ttMode}`
   );
 
   const rl = readline.createInterface({
@@ -221,7 +259,7 @@ export async function runPublish(): Promise<void> {
         continue;
       }
 
-      const outcome = await publishVideo(s);
+      const outcome = await publishVideo(s, opts);
       const isDryRun = outcome.youtubeDryRun || outcome.tiktokDryRun;
 
       if (!isDryRun) {
@@ -245,7 +283,11 @@ export async function runPublish(): Promise<void> {
     console.log('─────────────────────────────');
     for (const r of summary) {
       const tag = r.dryRun ? '[DRY-RUN]' : '[LIVE]';
-      const yt = r.youtubeUrl ?? (r.dryRun ? 'would-publish' : 'failed');
+      const yt = r.youtubeUrl
+        ? (r.youtubeUrl.startsWith('manual_yt_')
+            ? `guide at output/ready-to-post/script_${r.id}_youtube.txt`
+            : r.youtubeUrl)
+        : (r.dryRun ? 'would-publish' : 'failed');
       const tt = r.tiktokPublishId
         ? (r.tiktokPublishId.startsWith('manual_')
             ? `guide at output/ready-to-post/script_${r.id}.txt`
